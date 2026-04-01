@@ -4,10 +4,32 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 
-from database.models import upsert_user, get_user, get_watches, get_recent_changes
+from database.models import (
+    upsert_user,
+    get_user,
+    get_watches,
+    get_recent_changes,
+    add_watch,
+)
 from config import TIER_LABELS, TIER_LIMITS
 
 logger = logging.getLogger(__name__)
+
+WATCH_TYPE_ICONS = {
+    "page":      "📄",
+    "jobs":      "💼",
+    "reviews":   "⭐",
+    "pricing":   "💰",
+    "changelog": "📝",
+}
+
+DEMO_WATCHES = [
+    {
+        "label":      "Hacker News",
+        "url":        "https://news.ycombinator.com",
+        "watch_type": "page",
+    },
+]
 
 
 # ─── Keyboards ────────────────────────────────────────────────────────────────
@@ -30,7 +52,10 @@ def _build_free_user_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📊 Latest Digest",  callback_data="start_digest"),
             InlineKeyboardButton("📖 Help",           callback_data="start_help"),
         ],
-        [InlineKeyboardButton("⚡ Upgrade — Get AI Summaries + Instant Alerts", callback_data="start_upgrade")],
+        [InlineKeyboardButton(
+            "⚡ Upgrade — Get AI Summaries + Instant Alerts",
+            callback_data = "start_upgrade",
+        )],
     ])
 
 
@@ -59,14 +84,19 @@ def _build_keyboard(tier: str, has_watches: bool) -> InlineKeyboardMarkup:
 
 def _new_user_message(first_name: str) -> str:
     return (
-        f"👁 <b>Welcome to Competitor Intelligence Bot, {first_name}!</b>\n\n"
-        f"I watch your competitors 24/7 and alert you the moment something changes:\n\n"
+        f"👁 <b>Welcome to RivalWatch, {first_name}!</b>\n\n"
+        f"I watch your competitors 24/7 and alert you the moment "
+        f"something changes:\n\n"
         f"📄 <b>Pricing pages</b> — know before your customers do\n"
         f"💼 <b>Job postings</b> — spot their next move early\n"
-        f"⭐ <b>Reviews</b> — track sentiment shifts on G2, Trustpilot & more\n\n"
-        f"Pro users also get <b>AI-powered analysis</b> explaining <i>what the change means</i> "
-        f"strategically — not just that it happened.\n\n"
-        f"<b>Add your first competitor to get started. It takes 30 seconds.</b>"
+        f"⭐ <b>Reviews</b> — track sentiment on G2, Trustpilot & more\n"
+        f"💰 <b>Pricing deep scan</b> — catch plan restructures instantly\n"
+        f"📝 <b>Changelogs</b> — know what they're shipping\n\n"
+        f"🎁 <b>I've added Hacker News as your first demo watch.</b>\n"
+        f"It updates every few hours — you'll see your first real "
+        f"alert soon. That's exactly what a competitor alert looks like.\n\n"
+        f"<b>Now add your first real competitor below. "
+        f"It takes 30 seconds.</b>"
     )
 
 
@@ -80,29 +110,27 @@ def _returning_user_message(user, watches: list, changes: list) -> str:
     ai_enabled  = limits["ai_summary"]
     first_name  = user["first_name"] or "there"
 
-    # Build activity summary
     if changes:
         recent_count = len(changes)
         last         = changes[0]
-        last_label   = last["label"]
-        last_time    = last["detected_at"][:16]
         activity = (
             f"🔔 <b>{recent_count} change(s)</b> detected recently\n"
-            f"   Latest: <b>{last_label}</b> — <i>{last_time}</i>"
+            f"   Latest: <b>{last['label']}</b> — "
+            f"<i>{last['detected_at'][:16]}</i>"
         )
     else:
         activity = "✅ No changes detected — your competitors are quiet"
 
-    # Watches status bar
-    slots_used = "█" * watch_count + "░" * (max_watches - watch_count)
-    slots_line = f"[{slots_used}] {watch_count}/{max_watches}"
+    # Visual slots bar
+    filled    = "█" * watch_count
+    empty     = "░" * max(0, max_watches - watch_count)
+    slots_line = f"[{filled}{empty}] {watch_count}/{max_watches}"
 
-    # Upgrade nudge for free users watching competitors actively
     nudge = ""
     if tier == "free" and watch_count > 0 and not ai_enabled:
         nudge = (
             "\n\n💡 <i>Upgrade to Pro to get AI analysis explaining "
-            "what each change means for your business.</i>"
+            "what each change means strategically.</i>"
         )
 
     return (
@@ -117,10 +145,6 @@ def _returning_user_message(user, watches: list, changes: list) -> str:
 
 
 def _active_user_with_changes_message(user, watches: list, changes: list) -> str:
-    """
-    Special message variant for users who have recent changes —
-    surfaces the intelligence immediately on open.
-    """
     tier       = user["tier"]
     ai_enabled = TIER_LIMITS[tier]["ai_summary"]
     first_name = user["first_name"] or "there"
@@ -129,17 +153,27 @@ def _active_user_with_changes_message(user, watches: list, changes: list) -> str
 
     for change in changes[:3]:
         label      = change["label"]
-        watch_type = change["watch_type"]
+        watch_type = change["watch_type"] if "watch_type" in change.keys() else "page"
         detected   = change["detected_at"][:16]
         ai_summary = change["ai_summary"]
+        icon       = WATCH_TYPE_ICONS.get(watch_type, "🔍")
 
-        icon = {"page": "📄", "jobs": "💼", "reviews": "⭐"}.get(watch_type, "🔍")
         lines.append(f"{icon} <b>{label}</b> — <i>{detected}</i>")
 
         if ai_summary and ai_enabled:
             lines.append(f"   🧠 {ai_summary[:180]}")
         else:
-            lines.append(f"   Change detected. Tap <b>Latest Digest</b> for details.")
+            # Show a cleaned snippet instead of generic text
+            snapshot = change["new_snapshot"] or ""
+            clean    = " · ".join([
+                l.lstrip("+-").strip()
+                for l in snapshot.splitlines()
+                if l.strip() and not l.startswith(("@@", "---", "+++"))
+            ][:2])
+            if clean:
+                lines.append(f"   📝 {clean[:150]}")
+            else:
+                lines.append(f"   📝 Tap <b>Latest Digest</b> for details.")
 
         lines.append("")
 
@@ -160,15 +194,28 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_name = user_tg.first_name or "",
     )
 
-    user       = get_user(user_tg.id)
-    watches    = get_watches(user_tg.id)
-    changes    = get_recent_changes(user_tg.id, limit=5)
-    tier       = user["tier"]
+    user        = get_user(user_tg.id)
+    watches     = get_watches(user_tg.id)
+    is_new_user = len(watches) == 0
+
+    # ── Auto-add demo watch for brand new users ───────────────────────────────
+    if is_new_user:
+        for demo in DEMO_WATCHES:
+            add_watch(
+                user_id    = user_tg.id,
+                label      = demo["label"],
+                url        = demo["url"],
+                watch_type = demo["watch_type"],
+            )
+        watches = get_watches(user_tg.id)
+
+    changes     = get_recent_changes(user_tg.id, limit=5)
+    tier        = user["tier"]
     has_watches = len(watches) > 0
     has_changes = len(changes) > 0
 
-    # Choose message variant
-    if not has_watches:
+    # ── Choose message variant ────────────────────────────────────────────────
+    if is_new_user:
         message = _new_user_message(user_tg.first_name or "there")
     elif has_changes:
         message = _active_user_with_changes_message(user, watches, changes)
@@ -193,8 +240,7 @@ async def start_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
     data  = query.data
 
     if data == "start_watch":
-        # Handled by ConversationHandler — should not reach here
-        # but kept as safety fallback
+        # ConversationHandler handles this — fallback only
         await query.message.reply_text(
             "➕ Use /watch to add a competitor.",
             parse_mode = ParseMode.HTML,
@@ -217,9 +263,9 @@ async def start_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
             text = (
                 "📖 <b>How It Works</b>\n\n"
                 "1️⃣ <b>/watch</b> — Add a competitor URL to monitor\n"
-                "2️⃣ I check it automatically based on your plan interval\n"
+                "2️⃣ I check it automatically on your plan's schedule\n"
                 "3️⃣ The moment something changes, I alert you instantly\n"
-                "4️⃣ Pro users get an AI explanation of what the change means\n\n"
+                "4️⃣ Pro users get AI analysis explaining what it means\n\n"
                 "<b>Commands</b>\n"
                 "/watch   — Add a competitor\n"
                 "/list    — View active watches\n"
@@ -227,10 +273,15 @@ async def start_callback_handler(update: Update, context: ContextTypes.DEFAULT_T
                 "/digest  — View recent changes\n"
                 "/upgrade — Upgrade your plan\n"
                 "/start   — Back to main menu\n\n"
-                "<b>Supported watch types:</b>\n"
+                "<b>What I can monitor:</b>\n"
                 "📄 Pricing & landing pages\n"
-                "💼 Job postings (Greenhouse, Lever + more)\n"
+                "💰 Pricing pages (deep scan — plan names, prices, CTAs)\n"
+                "💼 Job postings (Greenhouse, Lever + generic boards)\n"
                 "⭐ Reviews (G2, Trustpilot, Capterra, ProductHunt)\n"
+                "📝 Changelogs, blogs & release notes\n\n"
+                "<b>Demo watch:</b>\n"
+                "Every new user gets <b>Hacker News</b> added automatically "
+                "so you see your first real alert within hours of signing up."
             ),
             parse_mode               = ParseMode.HTML,
             disable_web_page_preview = True,
