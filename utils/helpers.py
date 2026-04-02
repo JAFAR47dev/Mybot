@@ -168,3 +168,29 @@ def sanitize_label(label: str) -> str:
     """
     label = re.sub(r"<[^>]+>", "", label)
     return label.strip()[:50]
+    
+def is_quiet_hours(user: dict) -> bool:
+    """
+    Returns True if current UTC time falls within the user's quiet hours.
+    Handles overnight ranges e.g. 22:00 → 07:00 correctly.
+    """
+    from datetime import datetime, timezone
+
+    if not user["quiet_hours_on"]:
+        return False
+
+    start = user["quiet_hours_start"]
+    end   = user["quiet_hours_end"]
+
+    if start is None or end is None:
+        return False
+
+    current_hr = datetime.now(timezone.utc).hour
+
+    if start < end:
+        # Same-day range e.g. 09:00 → 17:00
+        return start <= current_hr < end
+    else:
+        # Overnight range e.g. 22:00 → 07:00
+        return current_hr >= start or current_hr < end
+

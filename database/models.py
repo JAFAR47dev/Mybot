@@ -261,3 +261,40 @@ def get_payment(payment_id: str) -> Optional[sqlite3.Row]:
         return conn.execute(
             "SELECT * FROM payments WHERE payment_id = ?", (payment_id,)
         ).fetchone()
+        
+def get_user_settings(user_id: int) -> Optional[sqlite3.Row]:
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT quiet_hours_on, quiet_hours_start, quiet_hours_end
+            FROM users WHERE user_id = ?
+        """, (user_id,)).fetchone()
+
+
+def save_quiet_hours(user_id: int, start_hr: int, end_hr: int):
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE users
+            SET quiet_hours_on    = 1,
+                quiet_hours_start = ?,
+                quiet_hours_end   = ?
+            WHERE user_id = ?
+        """, (start_hr, end_hr, user_id))
+
+
+def toggle_quiet_hours(user_id: int, enabled: bool):
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE users SET quiet_hours_on = ?
+            WHERE user_id = ?
+        """, (1 if enabled else 0, user_id))
+
+
+def clear_quiet_hours(user_id: int):
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE users
+            SET quiet_hours_on    = 0,
+                quiet_hours_start = NULL,
+                quiet_hours_end   = NULL
+            WHERE user_id = ?
+        """, (user_id,))

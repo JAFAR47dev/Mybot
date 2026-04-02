@@ -113,6 +113,10 @@ def _split_message(text: str, limit: int = TG_LIMIT) -> list[str]:
     return chunks
 
 
+from utils.helpers import is_quiet_hours
+from database.models import get_user
+
+
 async def send_alert(
     bot:           Bot,
     user_id:       int,
@@ -128,9 +132,19 @@ async def send_alert(
 ) -> bool:
     """
     Format and send a change alert.
-    Automatically splits messages that exceed Telegram's 4096 char limit.
-    Returns True if all parts delivered successfully.
+    Skips delivery silently if user is in quiet hours —
+    change is already logged in DB so retry job will
+    deliver it when quiet hours end.
     """
+    # Check quiet hours before sending
+    user = get_user(user_id)
+    if user and is_quiet_hours(user):
+        logger.info(
+            f"[notifier] Quiet hours active for user={user_id} — "
+            f"alert for {label} held, will retry later"
+        )
+        return False   # returning False keeps change as unnotified in DB
+
     message = _format_alert(
         label         = label,
         url           = url,
@@ -155,11 +169,17 @@ async def send_alert(
                 disable_web_page_preview = True,
             )
         except TelegramError as e:
-            logger.error(f"[notifier] Failed to send alert chunk {i+1} to {user_id}: {e}")
+            logger.error(
+                f"[notifier] Failed to send alert chunk {i+1} "
+                f"to {user_id}: {e}"
+            )
             success = False
 
     if success:
-        logger.info(f"[notifier] Alert sent to user={user_id} label={label} chunks={len(chunks)}")
+        logger.info(
+            f"[notifier] Alert sent to user={user_id} "
+            f"label={label} chunks={len(chunks)}"
+        )
 
     return success
 

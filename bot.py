@@ -31,6 +31,7 @@ from handlers.upgrade import (
     successful_payment_handler,
 )
 from handlers.admin import admin_handler, admin_callback, admin_message_handler
+from handlers.settings import settings_handler, settings_callback
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -79,6 +80,7 @@ def main():
     app.add_handler(CommandHandler("upgrade", upgrade_handler))
     app.add_handler(CommandHandler("remove",  remove_handler))
     app.add_handler(CommandHandler("admin",   admin_handler))
+    app.add_handler(CommandHandler("settings", settings_handler))
 
     # ── 3. Telegram Stars payment handlers ────────────────────────────────────
     app.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
@@ -93,6 +95,8 @@ def main():
     app.add_handler(CallbackQueryHandler(remove_callback,        pattern="^remove_"))
     app.add_handler(CallbackQueryHandler(upgrade_callback,       pattern="^upgrade_"))
     app.add_handler(CallbackQueryHandler(admin_callback,         pattern="^admin_"))
+    app.add_handler(CallbackQueryHandler(settings_callback, pattern="^qh_"))
+
 
     # ── 5. Admin free-text handler (ADMIN_IDS only) ───────────────────────────
     if ADMIN_IDS:
